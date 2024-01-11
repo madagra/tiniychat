@@ -15,6 +15,11 @@ type Message struct {
 	Time     string `json:"time"`
 }
 
+type User struct {
+	isOnline bool
+	msgCh    chan Message
+}
+
 type Command string
 
 const (
@@ -27,35 +32,34 @@ const (
 )
 
 // maximum number of buffered messages in
-// a session channel
+// a session channel. If more that nBufMsg are
+// sent while the user is offline, the exceeding ones
+// will be discarded
 const nBufMsg = 1000
 
-// map to hold active users with current connection
-var ActiveUsers = make(map[string]net.Conn)
+// map to hold the available users
+var Users = make(map[string]*User)
 
-// map to hold the available users who can be either
-// online or offline
-var Users = make(map[string]chan Message)
-
-func SetUserOnline(userName string, conn net.Conn) chan Message {
+func SetUserOnline(userName string, conn net.Conn) *User {
 	log.Debug().Msgf("Setting user %s online", userName)
 
 	_, exists := Users[userName]
 	if !exists {
-		Users[userName] = make(chan Message, nBufMsg)
+		Users[userName] = &User{
+			msgCh:    make(chan Message, nBufMsg),
+			isOnline: true,
+		}
 	}
-
-	ActiveUsers[userName] = conn
 	return Users[userName]
 }
 
 func SetUserOffline(userName string) {
-	_, exists := ActiveUsers[userName]
+	user, exists := Users[userName]
 	if !exists {
-		log.Warn().Msgf("The user %s cannot be set offline.", userName)
+		log.Warn().Msgf("The user %s cannot be set offline since it does not exist.", userName)
 	} else {
 		log.Debug().Msgf("Setting user %s offline", userName)
-		delete(ActiveUsers, userName)
+		user.isOnline = false
 	}
 }
 

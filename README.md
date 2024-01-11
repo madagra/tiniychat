@@ -37,8 +37,9 @@ The design of the application is pretty basic but makes heavy use of goroutines.
 
 *Client*. The user is immediately prompted at startup with his
 username. This username acts as a **unique** identifier for the user. Two
-anonymous goroutines in the `main()` functions handle *(1)* user prompts,
-sending them to the server with the right format and *(2)* message received
+[anonymous](https://www.practical-go-lessons.com/chap-24-anonymous-functions-and-closures)
+goroutines in the `main()` function handle *(1)* user prompts,
+sending them to the server with the right format and *(2)* messages
 from the server, taking care of displaying them with time and sender information
 (if in a conversation). A common channel is used to keep track of any error
 occurred; the client stops if an error is detected.
@@ -47,7 +48,8 @@ occurred; the client stops if an error is detected.
 
 *Server*. The server keeps track of the users using a simple in-memory map `Users`
 of type `map[string]chan Message`. In this mapping, the keys are the usernames
-and the values are channels used for message delivery.
+and the values are pointers `User` datastructures holding information about
+the status of the user (online/offline) and a channel used for message delivery.
 
 All messages have a fixed structure defined in the following datastructure:
 
@@ -79,12 +81,13 @@ initialization and termination of the goroutines.
 
 The chat is currently very basic. Some possible improvements are the following:
 
-* allow for starting and concluding multiple conversations with the same client session. This can very
-likely be offloaded to multiple goroutines on the server.
+* allow for starting and concluding multiple conversations with the same client session. This can very likely be offloaded to multiple goroutines on the server.
+* add basic authentication methods for the users
 * allow for sending images and other type of files rather than text.
-* move from simple TCP sockets to more performance gRPC approach using
-shared protocol buffers for exchanging messages.
+* move from simple TCP sockets to a more performant gRPC approach using
+shared protocol buffer messages for handling conversation and commands.
 * use a better CLI library such as [Bubble Tea](https://github.com/charmbracelet/bubbletea) for a more fancy terminal display.
+* Add exhaustive unit tests
 
 Since it has been developed mainly for learning purposes, these improvements might
 never become a reality.

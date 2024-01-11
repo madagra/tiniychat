@@ -2,12 +2,12 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"net"
 	"os"
-	"flag"
 	"strings"
-	"encoding/json"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -16,7 +16,6 @@ import (
 const protocol = "tcp"
 const host = "localhost"
 const port = "8080"
-
 
 func getUserInput(msg string, reader *bufio.Reader) (string, error) {
 
@@ -78,10 +77,10 @@ func main() {
 				errCh <- errRead
 				break
 			}
-			
+
 			data := map[string]string{
 				"sender": userName,
-				"body": message,
+				"body":   message,
 			}
 			dataJson, _ := json.Marshal(data)
 
@@ -90,7 +89,7 @@ func main() {
 				errCh <- errWrite
 				break
 			}
-			
+
 			writerConn.Flush()
 			log.Debug().Msgf("Message wrote: %s", message)
 		}
@@ -106,7 +105,7 @@ func main() {
 				errCh <- err
 				break
 			}
-			
+
 			var data map[string]interface{}
 			err = json.Unmarshal([]byte(response), &data)
 			if err != nil {
@@ -126,7 +125,7 @@ func main() {
 	}()
 
 	// listen for any error and return if one is found
-	err = <- errCh
+	err = <-errCh
 	log.Error().Msgf("Error %+v detected. Quitting the client", err)
 	return
 }

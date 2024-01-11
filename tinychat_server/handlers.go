@@ -14,7 +14,7 @@ import (
 func HandleConversation(conn net.Conn, adminCh chan string) {
 
 	userName := <-adminCh
-	msgCh, _ := Users[userName]
+	user, _ := Users[userName]
 	writer := bufio.NewWriter(conn)
 	log.Debug().Msgf("Handling conversations for user %s", userName)
 
@@ -24,7 +24,7 @@ Loop:
 		case user := <-adminCh:
 			log.Debug().Msgf("User %s is now offline, no conversation handling", user)
 			break Loop
-		case message := <-msgCh:
+		case message := <-(*user).msgCh:
 			msgJson := Serialize(&message)
 			writer.WriteString(msgJson)
 			writer.Flush()
@@ -67,16 +67,15 @@ Loop:
 
 		cmdOnly := strings.Split(message, " ")[0]
 		cmd := Command(strings.TrimSuffix(cmdOnly[1:], "\n"))
-		log.Debug().Msgf("Received command %s", cmd)
+		log.Debug().Msgf("User %s received command %s", userName, cmd)
 
 		switch cmd {
 
 		case USERS:
 			var users []string
-			for key := range Users {
-				_, isOnline := ActiveUsers[key]
+			for key, user := range Users {
 				var userMsg string
-				if isOnline {
+				if user.isOnline {
 					userMsg = fmt.Sprintf("%s <ONLINE>", key)
 				} else {
 					userMsg = fmt.Sprintf("%s <OFFLINE>", key)
@@ -130,12 +129,12 @@ Loop:
 				msgJson := SerializeFromData("", userName, errMsg)
 				writer.WriteString(msgJson)
 			} else {
-				ch, exists := Users[currentReceiver]
+				user, exists := Users[currentReceiver]
 				if !exists {
-					log.Error().Msg("This should not happen!")
+					log.Error().Msg("Trying to send a message to a non-existing user!")
 					continue Loop
 				} else {
-					ch <- Message{
+					user.msgCh <- Message{
 						Sender:   userName,
 						Receiver: currentReceiver,
 						Body:     message,
