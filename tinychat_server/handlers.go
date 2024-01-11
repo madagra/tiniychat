@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -10,166 +11,139 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const initMessage = "INIT"
-const quitMessage = "QUIT"
-const waitTime = 2 * time.Second
+func HandleConversation(conn net.Conn, adminCh chan string) {
 
-// maximum number of buffered messages in
-// a session channel
-const nBufMsg = 100
+	userName := <-adminCh
+	msgCh, _ := Users[userName]
+	writer := bufio.NewWriter(conn)
+	log.Debug().Msgf("Handling conversations for user %s", userName)
 
-func closeSession(session Session) Session {
-
-	key := fmt.Sprintf("%s:%s", session.Sender, session.Receiver)
-	session.Status = CLOSED
-
-	close(session.Channel)
-	delete(ActiveSessions, key)
-
-	log.Debug().Msgf("Removed session from %s to %s with key %s", session.Sender, session.Receiver, key)
-
-	return session
-}
-
-// read the first message containing sender and receiver
-// and check if the conversation is already ongoing
-func HandleInit(conn net.Conn, adminCh chan Session) {
-
-	reader := bufio.NewReader(conn)
-	message, _ := reader.ReadString('\n')
-
-	tmp := strings.Split(strings.ReplaceAll(message, "\n", ""), ":")
-
-	var key string
-	if tmp[0] == initMessage {
-
-		key = strings.Join(tmp[1:], ":")
-		_, exists := ActiveSessions[key]
-
-		if !exists {
-			ActiveSessions[key] = Session{
-				Sender:   tmp[1],
-				Receiver: tmp[2],
-				Channel:  make(chan string, nBufMsg),
-				Status:   OPEN,
-			}
-		}
-
-	}
-
-	// send information for both Read and Write routines
-	// 3 times because there are 3 calls to the channel at the beginning
-	// of the different goroutines
-	adminCh <- ActiveSessions[key]
-	adminCh <- ActiveSessions[key]
-	adminCh <- ActiveSessions[key]
-}
-
-// handle reading of new messages coming from
-// the input connection. Messages are processed in
-// sequence and sent to the channel initialized with
-// the given active session
-// the `adminCh` variable is just a configuration channel
-// which blocks until the handler is ready to listen to
-// messages
-func HandleRead(conn net.Conn, adminCh chan Session) {
-
-	session := <-adminCh
-	reader := bufio.NewReader(conn)
-	key := fmt.Sprintf("%s:%s", session.Sender, session.Receiver)
-
+Loop:
 	for {
-
-		message, err := reader.ReadString('\n')
-		log.Debug().Msgf("READ - %s - sender: %s - receiver: %s", strings.ReplaceAll(message, "\n", ""), session.Sender, session.Receiver)
-
-		if err != nil {
-			log.Error().Msgf("Error %+v detected, connection is not active anymore", err.Error())
-			break
+		select {
+		case user := <-adminCh:
+			log.Debug().Msgf("User %s is now offline, no conversation handling", user)
+			break Loop
+		case message := <-msgCh:
+			msgJson := Serialize(&message)
+			writer.WriteString(msgJson)
+			writer.Flush()
 		}
-
-		if strings.ReplaceAll(message, "\n", "") == quitMessage {
-			break
-		}
-
-		// send the message in the channel
-		session.Channel <- message
-
 	}
-
-	// notify the admin channel that the session has been closed
-	adminCh <- closeSession(ActiveSessions[key])
 }
 
-// handle writing of new messages coming from
-// the input connection. It uses the sender and receiver
-// identifiers of the current session to check if another
-// session is available for receiving the messages. If not
-// it waits until it is available
-// the `adminCh` variable is just a configuration channel
-// which blocks until the handler is ready to listen to
-// messages
-func HandleWrite(conn net.Conn, adminCh chan Session) {
+func HandleCommands(conn net.Conn, adminCh chan string) {
 
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
 
-	thisSession := <-adminCh
-	otherKey := fmt.Sprintf("%s:%s", thisSession.Receiver, thisSession.Sender)
+	// the first string received is always the username
+	userName, _ := reader.ReadString('\n')
+	userName = strings.ReplaceAll(userName, "\n", "")
+	adminCh <- userName
 
+	log.Debug().Msgf("Handling commands for user %s", userName)
+	SetUserOnline(userName, conn)
+
+	var inConversation bool = false
+	var currentReceiver string = ""
+
+Loop:
 	for {
 
-		otherSession, otherSessionExists := ActiveSessions[otherKey]
-		log.Debug().Msgf("WRITE - Session with key %s exists? %v", otherKey, otherSessionExists)
+		response, _ := reader.ReadString('\n')
 
-		if otherSessionExists {
-			select {
+		msgJson := Message{}
+		json.Unmarshal([]byte(response), &msgJson)
 
-			case session := <-adminCh:
-				if session.Status == CLOSED {
-					log.Debug().Msg("WRITE - closing goroutine")
-					return
-				}
-
-			case message := <-otherSession.Channel:
-				_, err := writer.WriteString(message)
-				if err != nil {
-					log.Error().Msgf("Error %+v detected, connection is not active anymore", err.Error())
-					continue
-				}
-				writer.Flush()
-
-			}
-
+		var message string
+		if len(response) == 0 {
+			message = "/" + QUIT
 		} else {
-			select {
+			message = msgJson.Body
+		}
 
-			case session := <-adminCh:
-				if session.Status == CLOSED {
-					log.Debug().Msg("WRITE - closing goroutine")
-					return
+		cmdOnly := strings.Split(message, " ")[0]
+		cmd := Command(strings.TrimSuffix(cmdOnly[1:], "\n"))
+		log.Debug().Msgf("Received command %s", cmd)
+
+		switch cmd {
+
+		case USERS:
+			var users []string
+			for key := range Users {
+				_, isOnline := ActiveUsers[key]
+				var userMsg string
+				if isOnline {
+					userMsg = fmt.Sprintf("%s <ONLINE>", key)
+				} else {
+					userMsg = fmt.Sprintf("%s <OFFLINE>", key)
 				}
-
-			default:
-				time.Sleep(waitTime)
-
+				users = append(users, userMsg)
 			}
+			msgJson := SerializeFromData("", userName, strings.Join(users, "\n"))
+			writer.WriteString(msgJson)
+			writer.Flush()
+
+		case COMMANDS:
+			cmds := []string{string(USERS), COMMANDS, QUIT, TIME, START, STOP}
+			msgJson := SerializeFromData("", userName, strings.Join(cmds, "\n"))
+			writer.WriteString(msgJson)
+			writer.Flush()
+
+		case TIME:
+			currentTime := time.Now().Format("2006-01-02 15:04:05")
+			msgJson := SerializeFromData("", userName, currentTime)
+			writer.WriteString(msgJson)
+			writer.Flush()
+
+		case START:
+			receiver := strings.TrimSuffix(strings.Split(message, " ")[1], "\n")
+			_, exists := Users[receiver]
+			if !exists {
+				errMsg := fmt.Sprintf("Cannot start a conversation with user %s. The user does not exist!", strings.TrimSuffix(receiver, "\n"))
+				msgJson := SerializeFromData("", userName, errMsg)
+				writer.WriteString(msgJson)
+				writer.Flush()
+			} else {
+				inConversation = true
+				log.Debug().Msgf("Starting conversation with user %s", receiver)
+				currentReceiver = receiver
+			}
+
+		case STOP:
+			log.Debug().Msgf("Stopping conversation with user %s", currentReceiver)
+			inConversation = false
+			currentReceiver = ""
+
+		case QUIT:
+			inConversation = false
+			SetUserOffline(userName)
+			adminCh <- currentReceiver
+			break Loop
+
+		default:
+			if !inConversation {
+				errMsg := fmt.Sprintf("Command %s not recognized!", cmd)
+				msgJson := SerializeFromData("", userName, errMsg)
+				writer.WriteString(msgJson)
+			} else {
+				ch, exists := Users[currentReceiver]
+				if !exists {
+					log.Error().Msg("This should not happen!")
+					continue Loop
+				} else {
+					ch <- Message{
+						Sender:   userName,
+						Receiver: currentReceiver,
+						Body:     message,
+						Time:     time.Now().Format("2006-01-02 15:04:05"),
+					}
+				}
+			}
+			writer.Flush()
 		}
-	}
-}
-
-// just for debugging purposes
-func RepeatMessage(conn net.Conn, adminCh chan Session) {
-
-	session := <-adminCh
-	writer := bufio.NewWriter(conn)
-
-	for {
-		message := <-session.Channel
-		_, err := writer.WriteString(message)
-		if err != nil {
-			log.Error().Msgf("Error %+v detected, connection is not active anymore.\n", err.Error())
-			break
-		}
-		writer.Flush()
 	}
 }

@@ -5,83 +5,128 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"flag"
 	"strings"
+	"encoding/json"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 const protocol = "tcp"
 const host = "localhost"
 const port = "8080"
 
-const initMessage = "INIT"
-const quitMessage = "QUIT"
 
-func getUserInput(msg string, reader *bufio.Reader) string {
+func getUserInput(msg string, reader *bufio.Reader) (string, error) {
 
 	// Prompt the user for input
 	fmt.Printf("%s", msg)
 
 	// Read user input from the terminal
-	userInput, err := reader.ReadString('\n')
-	if err != nil {
-		panic(fmt.Sprint("Error reading input: ", err))
-	}
-
-	return userInput
-}
-
-func sendMsg(msg string, conn net.Conn, writer *bufio.Writer) {
-	_, err := writer.WriteString(msg)
-	if err != nil {
-		panic(fmt.Sprint("Error sending message to server: ", err))
-	}
-	writer.Flush()
-}
-
-func handleWrite(conn net.Conn) {
-
-	reader := bufio.NewReader(conn)
-
-	for {
-
-		message, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Println("Connection is not available anymore: ", err.Error())
-			break
-		}
-		fmt.Printf("> %s", message)
-	}
+	input, err := reader.ReadString('\n')
+	return input, err
 }
 
 func main() {
 
-	reader := bufio.NewReader(os.Stdin)
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
-	userName := getUserInput("Enter your name: ", reader)
-	receiverName := getUserInput("Enter the person you want to chat with: ", reader)
+	// command line flags
+	isDebug := flag.Bool("debug", false, "sets log level to debug")
+	flag.Parse()
+
+	// logging
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	if *isDebug {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	}
 
 	// Connect to the server
 	conn, err := net.Dial(protocol, host+":"+port)
 	if err != nil {
-		fmt.Println(err)
+		log.Error().Msgf("Cannot connect to the server: %+v", err)
 		return
 	}
-	writer := bufio.NewWriter(conn)
 
 	defer conn.Close()
 
-	// Send some data to the server
-	senderMessage := strings.ReplaceAll(fmt.Sprintf("%s", userName), "\n", "")
-	receiverMessage := strings.ReplaceAll(fmt.Sprintf("%s", receiverName), "\n", "")
-	sendMsg(fmt.Sprintf("%s:%s:%s\n", initMessage, senderMessage, receiverMessage), conn, writer)
+	// define the readers
+	readerStdin := bufio.NewReader(os.Stdin)
+	readerConn := bufio.NewReader(conn)
+	writerConn := bufio.NewWriter(conn)
 
-	go handleWrite(conn)
-	for {
-		message := getUserInput("", reader)
-		sendMsg(message, conn, writer)
+	// send out any errors happening in reading or writing
+	// and close the connection if this happens
+	errCh := make(chan error)
 
-		if strings.ReplaceAll(message, "\n", "") == quitMessage {
-			break
-		}
+	// get the name of the user to initiate the
+	// session on the server
+	userName, _ := getUserInput("Enter your name: ", readerStdin)
+	_, err = writerConn.WriteString(userName)
+	if err != nil {
+		errCh <- err
 	}
+	writerConn.Flush()
 
+	// handle user input in a separate goroutine (anonymous)
+	go func() {
+
+		for {
+			message, errRead := getUserInput("", readerStdin)
+			if errRead != nil {
+				errCh <- errRead
+				break
+			}
+			
+			data := map[string]string{
+				"sender": userName,
+				"body": message,
+			}
+			dataJson, _ := json.Marshal(data)
+
+			_, errWrite := writerConn.WriteString(string(dataJson) + "\n")
+			if errWrite != nil {
+				errCh <- errWrite
+				break
+			}
+			
+			writerConn.Flush()
+			log.Debug().Msgf("Message wrote: %s", message)
+		}
+
+	}()
+
+	// handle messages received in a separate goroutine (anonymous)
+	go func() {
+		for {
+			response, err := readerConn.ReadString('\n')
+			log.Debug().Msgf("Message received: %s", response)
+			if err != nil {
+				errCh <- err
+				break
+			}
+			
+			var data map[string]interface{}
+			err = json.Unmarshal([]byte(response), &data)
+			if err != nil {
+				log.Error().Msgf("Failed to deserialize message: %s", response)
+				continue
+			}
+			var sender string = data["sender"].(string)
+			var body string = data["body"].(string)
+			var time string = data["time"].(string)
+
+			if sender != "" {
+				fmt.Printf("<%s,%s> %s\n", sender, time, strings.TrimSuffix(body, "\n"))
+			} else {
+				fmt.Printf("<> %s\n", strings.TrimSuffix(body, "\n"))
+			}
+		}
+	}()
+
+	// listen for any error and return if one is found
+	err = <- errCh
+	log.Error().Msgf("Error %+v detected. Quitting the client", err)
+	return
 }

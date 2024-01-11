@@ -12,24 +12,23 @@ const protocol = "tcp"
 const host = "localhost"
 const port = "8080"
 
-type Status int
+/*
+Protocol for chatting:
 
-const (
-	OPEN   Status = 0
-	CLOSED        = 1
-)
+Standard protocol
+1. client initiate connection
+2. server acknowledge and add the user to the list of online users
+3. client can send a series of commands such as /USERS, /ONLINE, /QUIT, /TIME or /START or /STOP
+4. server answer to the client with the result of the command
 
-type Session struct {
-	Sender   string
-	Receiver string
-	Channel  chan string
-	Status   Status
-}
-
-// map to hold active sessions
-// each session is identified by a key formed
-// in the following way: "<sender>:<receiver>"
-var ActiveSessions = make(map[string]Session)
+Conversation protocol
+1. the client send a /START command to the server to start a conversation
+2. the server acknowledge and expect a receiver in the following up command containing the name of the user to talk to
+3. the client sends the receiver information and it is then ready to send messages
+4. if the receiver is online, the message is delivered directly by the server
+5. if the receiver is offline, the message is buffered and sent as soon as the receiver comes online
+6. the client sends a /STOP command to tell the server that the conversation ends
+*/
 
 func main() {
 
@@ -65,12 +64,13 @@ func main() {
 			continue
 		}
 
-		adminCh := make(chan Session)
+		adminCh := make(chan string)
+
+		defer conn.Close()
 		defer close(adminCh)
 
-		go HandleInit(conn, adminCh)
-		go HandleRead(conn, adminCh)
-		go HandleWrite(conn, adminCh)
+		go HandleCommands(conn, adminCh)
+		go HandleConversation(conn, adminCh)
 	}
 
 }
