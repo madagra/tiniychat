@@ -43,12 +43,14 @@ var Users = make(map[string]*User)
 func SetUserOnline(userName string, conn net.Conn) *User {
 	log.Debug().Msgf("Setting user %s online", userName)
 
-	_, exists := Users[userName]
+	user, exists := Users[userName]
 	if !exists {
 		Users[userName] = &User{
 			msgCh:    make(chan Message, nBufMsg),
 			isOnline: true,
 		}
+	} else {
+		user.isOnline = true
 	}
 	return Users[userName]
 }

@@ -24,7 +24,7 @@ Loop:
 		case user := <-adminCh:
 			log.Debug().Msgf("User %s is now offline, no conversation handling", user)
 			break Loop
-		case message := <-(*user).msgCh:
+		case message := <-user.msgCh:
 			msgJson := Serialize(&message)
 			writer.WriteString(msgJson)
 			writer.Flush()
@@ -42,11 +42,11 @@ func HandleCommands(conn net.Conn, adminCh chan string) {
 	// the first string received is always the username
 	userName, _ := reader.ReadString('\n')
 	userName = strings.ReplaceAll(userName, "\n", "")
-	adminCh <- userName
 
 	log.Debug().Msgf("Handling commands for user %s", userName)
 	SetUserOnline(userName, conn)
 
+	adminCh <- userName
 	var inConversation bool = false
 	var currentReceiver string = ""
 
@@ -59,6 +59,9 @@ Loop:
 		json.Unmarshal([]byte(response), &msgJson)
 
 		var message string
+
+		// handle keyboard interrupt which corresponds
+		// to an empty message
 		if len(response) == 0 {
 			message = "/" + QUIT
 		} else {
