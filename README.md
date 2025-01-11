@@ -2,9 +2,13 @@
 
 TinyChat is a simple Golang application implementing a client-server
 chat service based on TCP sockets. This application was mainly developed
-for gaining a better understanding of goroutines, channels and generally
+for gaining a better understanding of goroutines, channels, and generally
 the way Golang handles concurrency. Therefore, no particular attention has
 been spent in improving the interface and performance of the code.
+
+See below an example of the application in action.
+
+https://github.com/user-attachments/assets/5bf9c898-9fa6-4244-8197-4f0f3269df07
 
 ## Usage
 
@@ -13,7 +17,7 @@ server in a terminal window running `make run_server`.
 
 In separate windows, run the clients using the `make run_client` command. You will
 be immediately prompted for your username. After this, you will be able to execute
-a series of commands in the chat, which should be prefixed with a `/`, similarly
+a series of commands in the chat, which should be prefixed with a `/`, similar
 to commonly used messaging systems like Telegram or Slack. The available commands
 are:
 
@@ -29,7 +33,7 @@ used for this purpose.
 * `/COMMANDS`: check the list of available commands.
 
 > **DISCLAIMER**: This application has been developed for learning purposes and
-there surely many bugs lurking around.
+there are surely many bugs lurking around.
 
 ## Design
 
